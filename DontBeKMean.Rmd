@@ -1,0 +1,101 @@
+---
+title: "Don't be K-Mean, join a gRoup"
+author: "The Members of R Squad"
+date: "10/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(cluster)
+library(factoextra)
+
+
+# The following hook function is modified from https://bookdown.org/yihui/rmarkdown-cookbook/hook-truncate.html and it automatically truncates excessively long outputs for each code chunk by overwriting the default output method in the knitr package
+hook_output <- knitr::knit_hooks$get("output")
+knitr::knit_hooks$set(output = function(x, options) {
+  if (!is.null(n <- options$out.lines)) {
+    x <- xfun::split_lines(x)
+    if (length(x) > n) {
+      # truncate the output
+      x <- c(head(x, n/2), "....\n", tail(x, n/2 + 1))
+    }
+    x <- paste(x, collapse = "\n")
+  }
+  hook_output(x, options)
+})
+# Truncates outputs to 8 lines
+knitr::opts_chunk$set(out.lines = 15) 
+options(max.print = 50)
+```
+
+## Download Data
+
+```{r data}
+workshopQueryData = read.csv(url('https://drive.google.com/uc?id=1ff4xFh4fl0-SvpYNeYQoNvDbzdiZfn-t'))
+bootcampTurnoutData = read.csv(url('https://drive.google.com/uc?id=1sovKLesEqPbkUte_ysRP9mGQ1gFCO2ME'))
+workshopsData = read.csv(url('https://drive.google.com/uc?id=10MngpIZoAGgwAk_sxoORj7WPYs74nz5Y'))
+applicantData = read.csv(url('https://drive.google.com/uc?id=1mPK8_AasPMdqy3D9D0kxjjKcIXmhhcQo'))
+```
+
+## Construct scoring matrix to cluster
+
+```{r clstrMatrix}
+cltrApplicantData = select(applicantData, c(userid, age_bin, classification, first_generation, 
+                                            datascience_experience, technology_experience, num_hackathons_attended))
+cltrApplicantData$age_bin = as.ordered(cltrApplicantData$age_bin)
+cltrApplicantData$classification = ordered(cltrApplicantData$classification, levels = c('Fr', 'So', 'Jr', 'Sr', 'O', 'Ma', 'PhD'))
+cltrApplicantData$first_generation = as.numeric(cltrApplicantData$first_generation)
+for(i in 1:length(cltrApplicantData$technology_experience)) {
+  cltrApplicantData$technology_experience[i]=length(strsplit(cltrApplicantData$technology_experience[i], ',')[[1]])
+}
+cltrApplicantData$num_hackathons_attended=ordered(cltrApplicantData$num_hackathons_attended, levels = c('0', '1-3', '4-7', '8-10', '10+'))
+cltrApplicantData = data.frame(userid = cltrApplicantData$userid,data.matrix(select(cltrApplicantData, !userid)))
+rownames(cltrApplicantData) = cltrApplicantData[,1]
+cltrApplicantData = select(cltrApplicantData, !userid)
+cltrApplicantData = scale(cltrApplicantData)
+```
+
+## Perform naive clustering with 4 clusters
+
+```{r clustr4, message = FALSE, cache = TRUE}
+distance = get_dist(cltrApplicantData)
+fviz_dist(distance, gradient = list(low = 'red', mid = 'yellow', high = 'green'), show_labels = FALSE)
+k4 = kmeans(cltrApplicantData, centers = 4, nstart = 25); k4
+fviz_cluster(k4, data = cltrApplicantData, geom = 'point')
+```
+
+## Calculate the gap statistic to find the optimal number of clusters
+
+```{r clustrGap, cache=TRUE, warning=FALSE, message = FALSE}
+set.seed(123456789)
+gapStat = clusGap(cltrApplicantData, FUN = kmeans, nstart = 25, K.max = 30, B = 50)
+fviz_gap_stat(gapStat)
+kOptimalGap = kmeans(cltrApplicantData, centers = 21, nstart = 25)
+fviz_cluster(kOptimalGap, data = cltrApplicantData, geom = 'point')
+```
+
+## Sanity check: are people in the same cluster 'similar'?
+
+```{r sanity}
+clusteredApplicants = applicantData %>% mutate(cluster = kOptimalGap$cluster) %>% group_by(cluster)
+#head(clusteredApplicants)
+#table(clusteredApplicants$cluster)
+filter(clusteredApplicants, cluster == 14) %>% select(!c(school, other_school, minors)) %>% sample_n(5)
+filter(clusteredApplicants, cluster == 1) %>% select(!c(school, other_school, minors)) %>% sample_n(5)
+```
+Looking at cluster 14, it appears to be a group of people who are mostly upperclassmen or graduate level students with lots of experience and many technical skills.
+In comparison, looking at cluster 1 it appears to be a group of people who are mostly underclassmen who are first gen students, very little experience and not many technical skills.
+
+## Given a userid, recommend 5 group mates of similar ability
+
+```{r groupmake, warning = FALSE, message = FALSE}
+groupMake = function(user){
+  userCluster = filter(clusteredApplicants, userid == user) %>% select(cluster)
+  filter(clusteredApplicants, cluster == userCluster, userid != user) %>% select(userid) %>% sample_n(5) %>% return()
+}
+randomUserID = sample(applicantData$userid, 1)
+groupMake(randomUserID)
+```
+
